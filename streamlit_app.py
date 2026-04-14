@@ -70,8 +70,83 @@ class ComplianceCrawler:
         self.base_url = base_url
         self.domain = urlparse(base_url).netloc
         self.visited_urls = set()
-        self.pdf_urls = []
+        self.pdf_urls = set()
+        self.headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        }
         
+    def extract_pdf_links_from_page(self, url: str) -> Set[str]:
+        """Extract all PDF links from a single page - IMPROVED VERSION"""
+        pdf_links = set()
+        
+        try:
+            response = requests.get(url, headers=self.headers, timeout=15, allow_redirects=True)
+            if response.status_code != 200:
+                return pdf_links
+            
+            soup = BeautifulSoup(response.content, 'html.parser')
+            
+            # Method 1: Find all <a> tags with href
+            for link in soup.find_all('a', href=True):
+                href = link['href']
+                
+                # Convert relative URLs to absolute
+                full_url = urljoin(url, href)
+                
+                # Check if it's a PDF (multiple patterns)
+                if (full_url.lower().endswith('.pdf') or 
+                    '.pdf?' in full_url.lower() or
+                    'pdf' in full_url.lower() and '.' in full_url.split('/')[-1]):
+                    pdf_links.add(full_url)
+            
+            # Method 2: Find iframe sources (PDFs embedded)
+            for iframe in soup.find_all('iframe', src=True):
+                src = urljoin(url, iframe['src'])
+                if '.pdf' in src.lower():
+                    pdf_links.add(src)
+            
+            # Method 3: Find object/embed tags
+            for obj in soup.find_all(['object', 'embed'], {'data': True}):
+                data = urljoin(url, obj['data'])
+                if '.pdf' in data.lower():
+                    pdf_links.add(data)
+            
+            for obj in soup.find_all(['object', 'embed'], {'src': True}):
+                src = urljoin(url, obj['src'])
+                if '.pdf' in src.lower():
+                    pdf_links.add(src)
+            
+            # Method 4: Look for download buttons/links with data attributes
+            for elem in soup.find_all(attrs={'data-href': True}):
+                data_href = urljoin(url, elem['data-href'])
+                if '.pdf' in data_href.lower():
+                    pdf_links.add(data_href)
+            
+            for elem in soup.find_all(attrs={'data-url': True}):
+                data_url = urljoin(url, elem['data-url'])
+                if '.pdf' in data_url.lower():
+                    pdf_links.add(data_url)
+            
+            # Method 5: Regex search in page content for PDF URLs
+            pdf_pattern = r'https?://[^\s<>"\']+\.pdf(?:\?[^\s<>"\']*)?'
+            pdf_matches = re.findall(pdf_pattern, response.text, re.IGNORECASE)
+            for match in pdf_matches:
+                pdf_links.add(match)
+            
+            # Method 6: Look in onclick attributes
+            for elem in soup.find_all(attrs={'onclick': True}):
+                onclick = elem['onclick']
+                # Extract URLs from onclick
+                url_matches = re.findall(r'["\']([^"\']+\.pdf[^"\']*)["\']', onclick, re.IGNORECASE)
+                for match in url_matches:
+                    full_url = urljoin(url, match)
+                    pdf_links.add(full_url)
+                    
+        except Exception as e:
+            st.warning(f"Error crawling {url}: {str(e)}")
+        
+        return pdf_links
+    
     def fetch_sitemap(self) -> List[str]:
         """Try to fetch sitemap.xml"""
         sitemap_urls = [
@@ -83,7 +158,7 @@ class ComplianceCrawler:
         urls = []
         for sitemap_url in sitemap_urls:
             try:
-                response = requests.get(sitemap_url, timeout=10)
+                response = requests.get(sitemap_url, headers=self.headers, timeout=10)
                 if response.status_code == 200:
                     if 'sitemap.xml' in sitemap_url or 'sitemap_index.xml' in sitemap_url:
                         root = ET.fromstring(response.content)
@@ -96,7 +171,8 @@ class ComplianceCrawler:
                             if line.lower().startswith('sitemap:'):
                                 sitemap = line.split(':', 1)[1].strip()
                                 urls.extend(self.fetch_sitemap_from_url(sitemap))
-                    return urls
+                    if urls:
+                        return urls
             except Exception as e:
                 continue
         return urls
@@ -104,7 +180,7 @@ class ComplianceCrawler:
     def fetch_sitemap_from_url(self, url: str) -> List[str]:
         """Fetch URLs from a specific sitemap URL"""
         try:
-            response = requests.get(url, timeout=10)
+            response = requests.get(url, headers=self.headers, timeout=10)
             if response.status_code == 200:
                 root = ET.fromstring(response.content)
                 return [elem.text for elem in root.findall('.//{http://www.sitemaps.org/schemas/sitemap/0.9}loc')]
@@ -112,62 +188,120 @@ class ComplianceCrawler:
             pass
         return []
     
+    def discover_common_paths(self) -> List[str]:
+        """Check common paths where PDFs might be stored"""
+        common_paths = [
+            '/downloads',
+            '/documents',
+            '/forms',
+            '/pdfs',
+            '/resources',
+            '/download-forms',
+            '/customer-service',
+            '/compliance',
+            '/regulatory',
+            '/download',
+            '/files',
+            '/media',
+            '/assets/pdf',
+            '/assets/documents'
+        ]
+        
+        urls = [self.base_url]
+        
+        for path in common_paths:
+            test_url = urljoin(self.base_url, path)
+            urls.append(test_url)
+            
+            # Also try with common extensions
+            urls.append(test_url + '.html')
+            urls.append(test_url + '/index.html')
+        
+        return urls
+    
     def crawl_for_pdfs(self, custom_path: str = None, max_pages: int = 50) -> List[str]:
-        """Crawl website for PDF documents"""
+        """IMPROVED: Crawl website for PDF documents with better detection"""
         urls_to_visit = []
         
-        # First try sitemap
+        # Strategy 1: Try sitemap
         sitemap_urls = self.fetch_sitemap()
         if sitemap_urls:
-            urls_to_visit = sitemap_urls[:max_pages]
-        else:
-            # Fallback to crawling from base URL
-            urls_to_visit = [self.base_url]
+            urls_to_visit.extend(sitemap_urls[:max_pages])
         
-        # Add custom path if provided
+        # Strategy 2: Add custom path if provided
         if custom_path:
             custom_url = urljoin(self.base_url, custom_path)
-            if custom_url not in urls_to_visit:
-                urls_to_visit.insert(0, custom_url)
+            urls_to_visit.insert(0, custom_url)
         
-        pdf_urls = set()
+        # Strategy 3: Add common paths
+        urls_to_visit.extend(self.discover_common_paths())
         
-        for url in urls_to_visit[:max_pages]:
+        # Strategy 4: Always include base URL
+        if self.base_url not in urls_to_visit:
+            urls_to_visit.insert(0, self.base_url)
+        
+        # Remove duplicates while preserving order
+        seen = set()
+        urls_to_visit = [x for x in urls_to_visit if not (x in seen or seen.add(x))]
+        
+        st.info(f"🔍 Scanning {min(len(urls_to_visit), max_pages)} pages for PDFs...")
+        
+        progress_container = st.empty()
+        
+        # Crawl pages
+        for idx, url in enumerate(urls_to_visit[:max_pages]):
             if url in self.visited_urls:
                 continue
-                
-            try:
-                self.visited_urls.add(url)
-                
-                # If URL is already a PDF, add it
-                if url.lower().endswith('.pdf'):
-                    pdf_urls.add(url)
-                    continue
-                
-                response = requests.get(url, timeout=10)
-                if response.status_code != 200:
-                    continue
-                
-                soup = BeautifulSoup(response.content, 'html.parser')
-                
-                # Find all links
-                for link in soup.find_all('a', href=True):
-                    href = link['href']
-                    full_url = urljoin(url, href)
-                    
-                    # Check if it's a PDF
-                    if full_url.lower().endswith('.pdf'):
-                        pdf_urls.add(full_url)
-                    
-                    # Add to visit queue if same domain and not visited
-                    if urlparse(full_url).netloc == self.domain and full_url not in self.visited_urls:
-                        if len(self.visited_urls) < max_pages:
-                            urls_to_visit.append(full_url)
-                            
-            except Exception as e:
+            
+            progress_container.text(f"Scanning page {idx + 1}/{min(len(urls_to_visit), max_pages)}: {url[:60]}...")
+            
+            self.visited_urls.add(url)
+            
+            # If URL itself is a PDF
+            if url.lower().endswith('.pdf'):
+                self.pdf_urls.add(url)
                 continue
+            
+            # Extract PDF links from this page
+            page_pdfs = self.extract_pdf_links_from_page(url)
+            self.pdf_urls.update(page_pdfs)
+            
+            # If we found PDFs, also crawl linked pages (breadth-first)
+            if page_pdfs and len(self.visited_urls) < max_pages:
+                try:
+                    response = requests.get(url, headers=self.headers, timeout=10)
+                    if response.status_code == 200:
+                        soup = BeautifulSoup(response.content, 'html.parser')
+                        
+                        # Find pages that might have more PDFs
+                        for link in soup.find_all('a', href=True):
+                            href = link['href']
+                            full_url = urljoin(url, href)
+                            
+                            # Only follow same-domain links
+                            if (urlparse(full_url).netloc == self.domain and 
+                                full_url not in self.visited_urls and
+                                len(urls_to_visit) < max_pages * 2):
+                                
+                                # Prioritize links with keywords
+                                link_text = link.get_text().lower()
+                                keywords = ['download', 'form', 'document', 'pdf', 'file', 'compliance', 'regulatory']
+                                
+                                if any(kw in full_url.lower() or kw in link_text for kw in keywords):
+                                    urls_to_visit.append(full_url)
+                except:
+                    pass
         
-        return list(pdf_urls)
+        progress_container.empty()
+        
+        # Filter out invalid URLs
+        valid_pdfs = []
+        for pdf_url in self.pdf_urls:
+            # Basic validation
+            if pdf_url.startswith('http') and len(pdf_url) > 10:
+                valid_pdfs.append(pdf_url)
+        
+        return valid_pdfs
 
 class ComplianceAnalyzer:
     def __init__(self, cloudflare_account_id: str, cloudflare_auth_token: str, 
@@ -305,7 +439,7 @@ with st.sidebar:
             help="Specific path where compliance documents are stored"
         )
     
-    max_pages = st.slider("Max pages to crawl", 10, 100, 50)
+    max_pages = st.slider("Max pages to crawl", 10, 200, 100)
     
     st.subheader("🏛️ Regulatory Body")
     regulator = st.selectbox(
@@ -383,10 +517,10 @@ elif analyze_button:
         if pdf_urls:
             # Show found documents
             with st.expander(f"📄 Found Documents ({len(pdf_urls)})"):
-                for i, url in enumerate(pdf_urls[:20], 1):
+                for i, url in enumerate(pdf_urls[:50], 1):
                     st.text(f"{i}. {url}")
-                if len(pdf_urls) > 20:
-                    st.info(f"... and {len(pdf_urls) - 20} more")
+                if len(pdf_urls) > 50:
+                    st.info(f"... and {len(pdf_urls) - 50} more")
             
             # Fetch regulatory context
             with st.spinner(f"📋 Fetching {regulator} regulatory context..."):
