@@ -1,782 +1,825 @@
 import streamlit as st
 import requests
-from urllib.parse import urljoin, urlparse
-import xml.etree.ElementTree as ET
 from bs4 import BeautifulSoup
-import re
-from typing import List, Dict, Set
+import urllib.parse
+from xml.etree import ElementTree as ET
 import json
-from datetime import datetime
 import time
+from urllib.robotparser import RobotFileParser
 
-# Page config
+# ─── Page Config ──────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="ComplyScore - Compliance Analysis Engine",
-    page_icon="🔍",
-    layout="wide"
+    page_title="ComplyKrawl",
+    page_icon="⚖️",
+    layout="wide",
+    initial_sidebar_state="expanded",
 )
 
-# Custom CSS (same as before)
+# ─── Custom CSS ───────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
-    .main-header {
-        font-size: 2.5rem;
-        font-weight: 700;
-        background: linear-gradient(120deg, #2E3192 0%, #1BFFFF 100%);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        margin-bottom: 0.5rem;
-    }
-    .score-card {
-        padding: 1.5rem;
-        border-radius: 10px;
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        color: white;
-        text-align: center;
-        margin: 1rem 0;
-    }
-    .score-number {
-        font-size: 3rem;
-        font-weight: 700;
-    }
-    .regulator-badge {
-        display: inline-block;
-        padding: 0.5rem 1rem;
-        border-radius: 20px;
-        background: #f0f2f6;
-        margin: 0.25rem;
-    }
-    .finding-card {
-        padding: 1rem;
-        border-left: 4px solid #667eea;
-        background: #f8f9fa;
-        margin: 0.5rem 0;
-        border-radius: 4px;
-    }
-    .critical { border-left-color: #dc3545; }
-    .warning { border-left-color: #ffc107; }
-    .info { border-left-color: #17a2b8; }
-    .success { border-left-color: #28a745; }
-    .debug-section {
-        background: #f8f9fa;
-        padding: 1rem;
-        border-radius: 4px;
-        font-family: monospace;
-        font-size: 0.85rem;
-        margin: 1rem 0;
-    }
+@import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Mono:wght@300;400;500&display=swap');
+
+html, body, [class*="css"] {
+    font-family: 'Syne', sans-serif;
+}
+.stApp {
+    background: #0a0d14;
+    color: #e8eaf0;
+}
+.main-header {
+    background: linear-gradient(135deg, #0d1117 0%, #111827 100%);
+    border: 1px solid #1e2d40;
+    border-radius: 16px;
+    padding: 32px 40px;
+    margin-bottom: 28px;
+    position: relative;
+    overflow: hidden;
+}
+.main-header::before {
+    content: '';
+    position: absolute;
+    top: -60px; right: -60px;
+    width: 200px; height: 200px;
+    background: radial-gradient(circle, rgba(56,189,248,0.12) 0%, transparent 70%);
+}
+.main-header h1 {
+    font-size: 2.4rem;
+    font-weight: 800;
+    color: #f0f4ff;
+    letter-spacing: -0.02em;
+    margin: 0;
+}
+.main-header .tagline {
+    font-family: 'DM Mono', monospace;
+    font-size: 0.78rem;
+    color: #38bdf8;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    margin-top: 6px;
+}
+.score-card {
+    background: #111827;
+    border: 1px solid #1e2d40;
+    border-radius: 14px;
+    padding: 22px 26px;
+    text-align: center;
+    transition: border-color 0.2s;
+}
+.score-card:hover { border-color: #38bdf8; }
+.score-number {
+    font-size: 3rem;
+    font-weight: 800;
+    letter-spacing: -0.04em;
+    line-height: 1;
+}
+.score-label {
+    font-family: 'DM Mono', monospace;
+    font-size: 0.7rem;
+    color: #64748b;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    margin-top: 6px;
+}
+.risk-badge {
+    display: inline-block;
+    padding: 4px 14px;
+    border-radius: 99px;
+    font-size: 0.75rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+.risk-low    { background: #064e3b; color: #6ee7b7; border: 1px solid #065f46; }
+.risk-medium { background: #451a03; color: #fbbf24; border: 1px solid #78350f; }
+.risk-high   { background: #450a0a; color: #f87171; border: 1px solid #7f1d1d; }
+.risk-critical { background: #3b0764; color: #d946ef; border: 1px solid #581c87; }
+.finding-item {
+    background: #0f172a;
+    border-left: 3px solid #38bdf8;
+    padding: 10px 16px;
+    margin: 6px 0;
+    border-radius: 0 8px 8px 0;
+    font-size: 0.88rem;
+    color: #cbd5e1;
+}
+.gap-item {
+    background: #0f172a;
+    border-left: 3px solid #f59e0b;
+    padding: 10px 16px;
+    margin: 6px 0;
+    border-radius: 0 8px 8px 0;
+    font-size: 0.88rem;
+    color: #cbd5e1;
+}
+.rec-item {
+    background: #0f172a;
+    border-left: 3px solid #22c55e;
+    padding: 10px 16px;
+    margin: 6px 0;
+    border-radius: 0 8px 8px 0;
+    font-size: 0.88rem;
+    color: #cbd5e1;
+}
+.url-chip {
+    display: inline-block;
+    background: #111827;
+    border: 1px solid #1e2d40;
+    border-radius: 6px;
+    padding: 3px 10px;
+    font-family: 'DM Mono', monospace;
+    font-size: 0.72rem;
+    color: #94a3b8;
+    margin: 3px;
+    word-break: break-all;
+}
+.section-header {
+    font-family: 'DM Mono', monospace;
+    font-size: 0.7rem;
+    color: #38bdf8;
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+    margin: 20px 0 10px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.section-header::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: #1e2d40;
+}
+.circular-card {
+    background: #0f172a;
+    border: 1px solid #1e2d40;
+    border-radius: 10px;
+    padding: 14px 18px;
+    margin: 8px 0;
+    font-size: 0.85rem;
+}
+.circular-card .circ-title { color: #e2e8f0; font-weight: 600; }
+.circular-card .circ-meta  { 
+    font-family: 'DM Mono', monospace;
+    font-size: 0.7rem; 
+    color: #64748b; 
+    margin-top: 4px;
+}
+.stProgress > div > div { background: #38bdf8; }
+div[data-testid="stMetricValue"] { font-family: 'Syne', sans-serif; font-weight: 700; }
+.stButton > button {
+    background: linear-gradient(135deg, #0ea5e9, #2563eb);
+    color: white;
+    border: none;
+    font-family: 'Syne', sans-serif;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    border-radius: 10px;
+    padding: 12px 28px;
+    transition: all 0.2s;
+}
+.stButton > button:hover {
+    background: linear-gradient(135deg, #38bdf8, #3b82f6);
+    transform: translateY(-1px);
+    box-shadow: 0 8px 25px rgba(14,165,233,0.3);
+}
 </style>
 """, unsafe_allow_html=True)
 
-# Initialize session state
-if 'analysis_complete' not in st.session_state:
-    st.session_state.analysis_complete = False
-if 'analysis_results' not in st.session_state:
-    st.session_state.analysis_results = None
-if 'show_debug' not in st.session_state:
-    st.session_state.show_debug = False
+# ─── Constants ─────────────────────────────────────────────────────────────────
+REGULATORS = {
+    "SEBI": {
+        "name": "Securities and Exchange Board of India",
+        "source": "sebi",
+        "country": "🇮🇳 India",
+        "color": "#f59e0b",
+    },
+    "RBI": {
+        "name": "Reserve Bank of India",
+        "source": "rbi",
+        "country": "🇮🇳 India",
+        "color": "#22c55e",
+    },
+    "FCA": {
+        "name": "Financial Conduct Authority",
+        "source": "fca",
+        "country": "🇬🇧 UK",
+        "color": "#60a5fa",
+    },
+}
 
-class ComplianceCrawler:
-    def __init__(self, base_url: str):
-        self.base_url = base_url
-        self.domain = urlparse(base_url).netloc
-        self.visited_urls = set()
-        self.pdf_urls = set()
-        self.headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-        }
-        
-    def extract_pdf_links_from_page(self, url: str) -> Set[str]:
-        """Extract all PDF links from a single page - IMPROVED VERSION"""
-        pdf_links = set()
-        
-        try:
-            response = requests.get(url, headers=self.headers, timeout=15, allow_redirects=True)
-            if response.status_code != 200:
-                return pdf_links
-            
-            soup = BeautifulSoup(response.content, 'html.parser')
-            
-            # Method 1: Find all <a> tags with href
-            for link in soup.find_all('a', href=True):
-                href = link['href']
-                full_url = urljoin(url, href)
-                
-                if (full_url.lower().endswith('.pdf') or 
-                    '.pdf?' in full_url.lower() or
-                    'pdf' in full_url.lower() and '.' in full_url.split('/')[-1]):
-                    pdf_links.add(full_url)
-            
-            # Method 2: Find iframe sources
-            for iframe in soup.find_all('iframe', src=True):
-                src = urljoin(url, iframe['src'])
-                if '.pdf' in src.lower():
-                    pdf_links.add(src)
-            
-            # Method 3: Find object/embed tags
-            for obj in soup.find_all(['object', 'embed'], {'data': True}):
-                data = urljoin(url, obj['data'])
-                if '.pdf' in data.lower():
-                    pdf_links.add(data)
-            
-            for obj in soup.find_all(['object', 'embed'], {'src': True}):
-                src = urljoin(url, obj['src'])
-                if '.pdf' in src.lower():
-                    pdf_links.add(src)
-            
-            # Method 4: Data attributes
-            for elem in soup.find_all(attrs={'data-href': True}):
-                data_href = urljoin(url, elem['data-href'])
-                if '.pdf' in data_href.lower():
-                    pdf_links.add(data_href)
-            
-            for elem in soup.find_all(attrs={'data-url': True}):
-                data_url = urljoin(url, elem['data-url'])
-                if '.pdf' in data_url.lower():
-                    pdf_links.add(data_url)
-            
-            # Method 5: Regex in content
-            pdf_pattern = r'https?://[^\s<>"\']+\.pdf(?:\?[^\s<>"\']*)?'
-            pdf_matches = re.findall(pdf_pattern, response.text, re.IGNORECASE)
-            for match in pdf_matches:
-                pdf_links.add(match)
-            
-            # Method 6: onclick attributes
-            for elem in soup.find_all(attrs={'onclick': True}):
-                onclick = elem['onclick']
-                url_matches = re.findall(r'["\']([^"\']+\.pdf[^"\']*)["\']', onclick, re.IGNORECASE)
-                for match in url_matches:
-                    full_url = urljoin(url, match)
-                    pdf_links.add(full_url)
-                    
-        except Exception as e:
-            pass
-        
-        return pdf_links
-    
-    def fetch_sitemap(self) -> List[str]:
-        sitemap_urls = [
-            urljoin(self.base_url, '/sitemap.xml'),
-            urljoin(self.base_url, '/sitemap_index.xml'),
-            urljoin(self.base_url, '/robots.txt')
-        ]
-        
-        urls = []
-        for sitemap_url in sitemap_urls:
-            try:
-                response = requests.get(sitemap_url, headers=self.headers, timeout=10)
-                if response.status_code == 200:
-                    if 'sitemap.xml' in sitemap_url or 'sitemap_index.xml' in sitemap_url:
-                        root = ET.fromstring(response.content)
-                        for url_elem in root.findall('.//{http://www.sitemaps.org/schemas/sitemap/0.9}loc'):
-                            urls.append(url_elem.text)
-                    elif 'robots.txt' in sitemap_url:
-                        for line in response.text.split('\n'):
-                            if line.lower().startswith('sitemap:'):
-                                sitemap = line.split(':', 1)[1].strip()
-                                urls.extend(self.fetch_sitemap_from_url(sitemap))
-                    if urls:
-                        return urls
-            except:
-                continue
-        return urls
-    
-    def fetch_sitemap_from_url(self, url: str) -> List[str]:
-        try:
-            response = requests.get(url, headers=self.headers, timeout=10)
-            if response.status_code == 200:
-                root = ET.fromstring(response.content)
-                return [elem.text for elem in root.findall('.//{http://www.sitemaps.org/schemas/sitemap/0.9}loc')]
-        except:
-            pass
-        return []
-    
-    def discover_common_paths(self) -> List[str]:
-        common_paths = [
-            '/downloads', '/documents', '/forms', '/pdfs', '/resources',
-            '/download-forms', '/customer-service', '/compliance', '/regulatory',
-            '/download', '/files', '/media', '/assets/pdf', '/assets/documents'
-        ]
-        
-        urls = [self.base_url]
-        for path in common_paths:
-            test_url = urljoin(self.base_url, path)
-            urls.append(test_url)
-            urls.append(test_url + '.html')
-            urls.append(test_url + '/index.html')
-        
-        return urls
-    
-    def crawl_for_pdfs(self, custom_path: str = None, max_pages: int = 50) -> List[str]:
-        urls_to_visit = []
-        
-        sitemap_urls = self.fetch_sitemap()
-        if sitemap_urls:
-            urls_to_visit.extend(sitemap_urls[:max_pages])
-        
-        if custom_path:
-            custom_url = urljoin(self.base_url, custom_path)
-            urls_to_visit.insert(0, custom_url)
-        
-        urls_to_visit.extend(self.discover_common_paths())
-        
-        if self.base_url not in urls_to_visit:
-            urls_to_visit.insert(0, self.base_url)
-        
-        seen = set()
-        urls_to_visit = [x for x in urls_to_visit if not (x in seen or seen.add(x))]
-        
-        st.info(f"🔍 Scanning {min(len(urls_to_visit), max_pages)} pages for PDFs...")
-        
-        progress_container = st.empty()
-        
-        for idx, url in enumerate(urls_to_visit[:max_pages]):
-            if url in self.visited_urls:
-                continue
-            
-            progress_container.text(f"Scanning page {idx + 1}/{min(len(urls_to_visit), max_pages)}: {url[:60]}...")
-            
-            self.visited_urls.add(url)
-            
-            if url.lower().endswith('.pdf'):
-                self.pdf_urls.add(url)
-                continue
-            
-            page_pdfs = self.extract_pdf_links_from_page(url)
-            self.pdf_urls.update(page_pdfs)
-            
-            if page_pdfs and len(self.visited_urls) < max_pages:
-                try:
-                    response = requests.get(url, headers=self.headers, timeout=10)
-                    if response.status_code == 200:
-                        soup = BeautifulSoup(response.content, 'html.parser')
-                        
-                        for link in soup.find_all('a', href=True):
-                            href = link['href']
-                            full_url = urljoin(url, href)
-                            
-                            if (urlparse(full_url).netloc == self.domain and 
-                                full_url not in self.visited_urls and
-                                len(urls_to_visit) < max_pages * 2):
-                                
-                                link_text = link.get_text().lower()
-                                keywords = ['download', 'form', 'document', 'pdf', 'file', 'compliance', 'regulatory']
-                                
-                                if any(kw in full_url.lower() or kw in link_text for kw in keywords):
-                                    urls_to_visit.append(full_url)
-                except:
-                    pass
-        
-        progress_container.empty()
-        
-        valid_pdfs = []
-        for pdf_url in self.pdf_urls:
-            if pdf_url.startswith('http') and len(pdf_url) > 10:
-                valid_pdfs.append(pdf_url)
-        
-        return valid_pdfs
+LENS_API_BASE = "https://lbtoopahmulfgffzjumy.supabase.co/functions/v1/lens-api"
+PDF_EXTRACT_API = "http://72.61.251.247:3000/extract-pdf-url"
 
-class ComplianceAnalyzer:
-    def __init__(self, cloudflare_account_id: str, cloudflare_auth_token: str, 
-                 supabase_api_key: str, pdf_extractor_url: str):
-        self.cloudflare_account_id = cloudflare_account_id
-        self.cloudflare_auth_token = cloudflare_auth_token
-        self.supabase_api_key = supabase_api_key
-        self.pdf_extractor_url = pdf_extractor_url
-        self.debug_info = []
-        
-    def get_regulatory_context(self, source: str, limit: int = 20) -> List[Dict]:
-        url = f"https://lbtoopahmulfgffzjumy.supabase.co/functions/v1/lens-api/circulars?source={source.lower()}&limit={limit}"
-        headers = {"x-api-key": self.supabase_api_key}
-        
-        try:
-            response = requests.get(url, headers=headers, timeout=30)
-            if response.status_code == 200:
-                return response.json()
-        except Exception as e:
-            st.error(f"Error fetching regulatory context: {str(e)}")
-        return []
-    
-    def extract_pdf_content(self, pdf_url: str) -> str:
-        try:
-            response = requests.post(
-                self.pdf_extractor_url,
-                json={"url": pdf_url},
-                timeout=60
-            )
-            if response.status_code == 200:
-                data = response.json()
-                text = data.get('text', '')
-                self.debug_info.append(f"✅ PDF extracted: {len(text)} characters")
-                return text
-            else:
-                self.debug_info.append(f"❌ PDF extraction failed: HTTP {response.status_code}")
-        except Exception as e:
-            self.debug_info.append(f"❌ PDF extraction error: {str(e)}")
-        return ""
-    
-    def analyze_with_ai(self, document_content: str, regulatory_context: List[Dict], 
-                       regulator: str, pdf_url: str) -> Dict:
-        """FIXED: Real AI analysis with proper error handling"""
-        
-        if not document_content or len(document_content) < 100:
-            return {
-                "score": 0,
-                "summary": f"ERROR: Document content too short or empty ({len(document_content)} chars)",
-                "findings": [{
-                    "level": "critical",
-                    "title": "No Document Content",
-                    "description": "PDF extraction failed or returned empty content",
-                    "regulation": "N/A"
-                }],
-                "recommendations": ["Verify PDF URL is accessible", "Check PDF extraction service"],
-                "raw_response": "No content to analyze",
-                "ai_error": True
-            }
-        
-        # Prepare regulatory context
-        context_summary = "\n".join([
-            f"- {circ.get('title', 'N/A')[:100]} (Date: {circ.get('date', 'N/A')})"
-            for circ in regulatory_context[:10]
-        ])
-        
-        system_prompt = f"""You are a compliance analyst expert for {regulator} regulations.
+# ─── Secrets ───────────────────────────────────────────────────────────────────
+def get_secret(key, default=""):
+    try:
+        return st.secrets[key]
+    except Exception:
+        return default
 
-Recent {regulator} Circulars:
-{context_summary}
+CF_ACCOUNT_ID    = get_secret("CLOUDFLARE_ACCOUNT_ID")
+CF_AUTH_TOKEN    = get_secret("CLOUDFLARE_AUTH_TOKEN")
+LENS_API_KEY     = get_secret("LENS_API_KEY")
+CF_AI_URL        = f"https://api.cloudflare.com/client/v4/accounts/{CF_ACCOUNT_ID}/ai/run/@cf/google/gemma-4-26b-a4b-it"
 
-CRITICAL: You MUST respond with ONLY valid JSON. No markdown, no explanations, ONLY JSON.
+# ─── Crawler Helpers ───────────────────────────────────────────────────────────
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (ComplyKrawl/1.0; compliance-crawler)",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+}
 
-Analyze the document and return this EXACT structure:
-{{
-    "score": 75,
-    "summary": "Brief 2-3 sentence summary of compliance status",
-    "findings": [
-        {{
-            "level": "critical",
-            "title": "Finding title",
-            "description": "Detailed description",
-            "regulation": "Relevant {regulator} regulation reference"
-        }}
-    ],
-    "recommendations": [
-        "Specific recommendation 1",
-        "Specific recommendation 2"
+def normalise_url(url: str) -> str:
+    url = url.strip()
+    if not url.startswith("http"):
+        url = "https://" + url
+    return url.rstrip("/")
+
+
+def fetch_sitemap(base_url: str) -> list[str] | None:
+    candidates = [
+        f"{base_url}/sitemap.xml",
+        f"{base_url}/sitemap_index.xml",
+        f"{base_url}/sitemap/sitemap.xml",
+        f"{base_url}/sitemap/index.xml",
     ]
-}}
+    # Check robots.txt for Sitemap hint
+    try:
+        robots_r = requests.get(f"{base_url}/robots.txt", headers=HEADERS, timeout=8)
+        if robots_r.status_code == 200:
+            for line in robots_r.text.splitlines():
+                if line.lower().startswith("sitemap:"):
+                    sitemap_url = line.split(":", 1)[1].strip()
+                    candidates.insert(0, sitemap_url)
+    except Exception:
+        pass
 
-Score guidelines:
-- 0-40: Critical violations, major gaps
-- 41-60: Significant issues, partial compliance
-- 61-80: Minor issues, mostly compliant
-- 81-100: Excellent compliance
-
-Finding levels: critical, warning, info, success"""
-
-        user_prompt = f"""Document URL: {pdf_url}
-
-Document Content (first 8000 chars):
-{document_content[:8000]}
-
-Analyze this document for {regulator} compliance. Return ONLY JSON, no other text."""
-        
-        url = f"https://api.cloudflare.com/client/v4/accounts/{self.cloudflare_account_id}/ai/run/@cf/google/gemma-4-26b-a4b-it"
-        headers = {
-            "Authorization": f"Bearer {self.cloudflare_auth_token}",
-            "Content-Type": "application/json"
-        }
-        payload = {
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
-            ],
-            "max_tokens": 2048,
-            "temperature": 0.3
-        }
-        
-        self.debug_info.append(f"🤖 Sending to Cloudflare AI...")
-        self.debug_info.append(f"📊 Document length: {len(document_content)} chars")
-        
+    for url in candidates:
         try:
-            response = requests.post(url, headers=headers, json=payload, timeout=120)
-            
-            self.debug_info.append(f"🔄 AI Response Status: {response.status_code}")
-            
-            if response.status_code != 200:
-                error_msg = f"Cloudflare AI API error: {response.status_code}"
-                self.debug_info.append(f"❌ {error_msg}")
-                self.debug_info.append(f"Response: {response.text[:500]}")
-                
-                return {
-                    "score": 0,
-                    "summary": f"AI API Error: {response.status_code}",
-                    "findings": [{
-                        "level": "critical",
-                        "title": "AI Analysis Failed",
-                        "description": f"Could not connect to AI service. Status: {response.status_code}",
-                        "regulation": "N/A"
-                    }],
-                    "recommendations": ["Check Cloudflare API credentials", "Verify API quota"],
-                    "raw_response": response.text[:500],
-                    "ai_error": True
-                }
-            
-            result = response.json()
-            ai_response = result.get('result', {}).get('response', '')
-            
-            self.debug_info.append(f"📝 Raw AI response length: {len(ai_response)} chars")
-            self.debug_info.append(f"First 200 chars: {ai_response[:200]}")
-            
-            # Try multiple JSON extraction methods
-            parsed_json = None
-            
-            # Method 1: Direct JSON parse
-            try:
-                parsed_json = json.loads(ai_response)
-                self.debug_info.append("✅ Method 1: Direct JSON parse succeeded")
-            except:
-                pass
-            
-            # Method 2: Extract JSON from markdown code blocks
-            if not parsed_json:
-                try:
-                    json_match = re.search(r'```json\s*(\{.*?\})\s*```', ai_response, re.DOTALL)
-                    if json_match:
-                        parsed_json = json.loads(json_match.group(1))
-                        self.debug_info.append("✅ Method 2: Markdown extraction succeeded")
-                except:
-                    pass
-            
-            # Method 3: Extract any JSON object
-            if not parsed_json:
-                try:
-                    json_match = re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', ai_response, re.DOTALL)
-                    if json_match:
-                        parsed_json = json.loads(json_match.group())
-                        self.debug_info.append("✅ Method 3: Regex extraction succeeded")
-                except:
-                    pass
-            
-            if parsed_json and isinstance(parsed_json, dict):
-                # Validate required fields
-                if 'score' in parsed_json and 'summary' in parsed_json:
-                    # Ensure findings and recommendations exist
-                    if 'findings' not in parsed_json:
-                        parsed_json['findings'] = []
-                    if 'recommendations' not in parsed_json:
-                        parsed_json['recommendations'] = []
-                    
-                    parsed_json['raw_response'] = ai_response[:500]
-                    parsed_json['ai_error'] = False
-                    self.debug_info.append(f"✅ Valid analysis returned: Score {parsed_json['score']}")
-                    return parsed_json
-            
-            # If all parsing failed
-            self.debug_info.append("❌ All JSON parsing methods failed")
-            self.debug_info.append(f"Full AI response: {ai_response}")
-            
-            return {
-                "score": 0,
-                "summary": "AI returned invalid format",
-                "findings": [{
-                    "level": "warning",
-                    "title": "Analysis Format Error",
-                    "description": f"AI response could not be parsed as JSON. Response: {ai_response[:200]}",
-                    "regulation": "N/A"
-                }],
-                "recommendations": ["Check AI prompt format", "Review AI response structure"],
-                "raw_response": ai_response,
-                "ai_error": True
-            }
-            
-        except Exception as e:
-            error_msg = f"AI analysis exception: {str(e)}"
-            self.debug_info.append(f"❌ {error_msg}")
-            
-            return {
-                "score": 0,
-                "summary": f"Analysis failed: {str(e)}",
-                "findings": [{
-                    "level": "critical",
-                    "title": "AI Analysis Exception",
-                    "description": str(e),
-                    "regulation": "N/A"
-                }],
-                "recommendations": ["Check network connection", "Verify AI service availability"],
-                "raw_response": str(e),
-                "ai_error": True
-            }
+            r = requests.get(url, headers=HEADERS, timeout=10)
+            ct = r.headers.get("Content-Type", "")
+            if r.status_code == 200 and ("xml" in ct or r.text.strip().startswith("<")):
+                urls = _parse_sitemap_xml(r.text, base_url)
+                if urls:
+                    return urls
+        except Exception:
+            pass
+    return None
 
-# Main App (sidebar and UI same as before, just the analysis part changes)
-st.markdown('<h1 class="main-header">🔍 ComplyScore</h1>', unsafe_allow_html=True)
-st.markdown("**Automated Compliance Analysis Engine - V3 with Real AI Analysis**")
 
-with st.sidebar:
-    st.header("⚙️ Configuration")
-    
-    website_url = st.text_input(
-        "Website URL",
-        placeholder="https://example.com",
-        help="Enter the website to analyze"
-    )
-    
-    st.subheader("📁 Document Discovery")
-    use_custom_path = st.checkbox("Use custom document path")
-    custom_path = ""
-    if use_custom_path:
-        custom_path = st.text_input(
-            "Custom Path",
-            placeholder="/compliance/documents",
-            help="Specific path where compliance documents are stored"
+def _parse_sitemap_xml(xml_text: str, base_url: str, depth: int = 0) -> list[str]:
+    if depth > 3:
+        return []
+    urls = []
+    try:
+        root = ET.fromstring(xml_text)
+        ns = {"sm": "http://www.sitemaps.org/schemas/sitemap/0.9"}
+
+        # Sitemap index
+        for child in root.findall("sm:sitemap", ns):
+            loc = child.find("sm:loc", ns)
+            if loc is not None and loc.text:
+                try:
+                    r = requests.get(loc.text.strip(), headers=HEADERS, timeout=10)
+                    if r.status_code == 200:
+                        urls.extend(_parse_sitemap_xml(r.text, base_url, depth + 1))
+                except Exception:
+                    pass
+
+        # Regular entries
+        for url_el in root.findall("sm:url", ns):
+            loc = url_el.find("sm:loc", ns)
+            if loc is not None and loc.text:
+                urls.append(loc.text.strip())
+    except Exception:
+        pass
+    return urls
+
+
+def crawl_website(base_url: str, max_pages: int = 50) -> list[str]:
+    visited: set[str] = set()
+    queue: list[str] = [base_url]
+    found: list[str] = []
+    parsed_base = urllib.parse.urlparse(base_url)
+    base_domain = parsed_base.netloc
+
+    while queue and len(visited) < max_pages:
+        url = queue.pop(0)
+        if url in visited:
+            continue
+        visited.add(url)
+        try:
+            r = requests.get(url, headers=HEADERS, timeout=10)
+            found.append(url)
+            soup = BeautifulSoup(r.text, "html.parser")
+            for tag in soup.find_all(["a", "link"], href=True):
+                href = tag["href"]
+                full = urllib.parse.urljoin(url, href)
+                parsed = urllib.parse.urlparse(full)
+                clean = parsed._replace(fragment="").geturl()
+                if parsed.netloc == base_domain and clean not in visited:
+                    queue.append(clean)
+        except Exception:
+            pass
+    return found
+
+
+def build_custom_urls(base_url: str, paths_text: str) -> list[str]:
+    urls = []
+    for line in paths_text.strip().splitlines():
+        path = line.strip()
+        if path:
+            urls.append(urllib.parse.urljoin(base_url + "/", path.lstrip("/")))
+    return urls
+
+
+DOC_EXTS = {".pdf", ".doc", ".docx", ".xlsx", ".xls", ".ppt", ".pptx", ".txt", ".csv"}
+
+def filter_documents(urls: list[str]) -> list[str]:
+    result = []
+    for u in urls:
+        path = urllib.parse.urlparse(u).path.lower()
+        if any(path.endswith(ext) for ext in DOC_EXTS):
+            result.append(u)
+    return result
+
+
+# ─── API Helpers ───────────────────────────────────────────────────────────────
+def fetch_circulars(source: str, limit: int = 10) -> dict | None:
+    try:
+        r = requests.get(
+            f"{LENS_API_BASE}/circulars",
+            params={"source": source, "limit": limit},
+            headers={"x-api-key": LENS_API_KEY},
+            timeout=15,
         )
-    
-    max_pages = st.slider("Max pages to crawl", 10, 200, 100)
-    
-    st.subheader("🏛️ Regulatory Body")
-    regulator = st.selectbox(
-        "Select Regulator",
-        ["SEBI", "RBI", "FCA"],
-        help="Choose the regulatory body for compliance analysis"
+        if r.status_code == 200:
+            return r.json()
+    except Exception:
+        pass
+    return None
+
+
+def extract_pdf(pdf_url: str) -> str | None:
+    try:
+        r = requests.post(
+            PDF_EXTRACT_API,
+            json={"url": pdf_url},
+            timeout=45,
+        )
+        if r.status_code == 200:
+            data = r.json()
+            text = (
+                data.get("text")
+                or data.get("content")
+                or data.get("extracted_text")
+                or json.dumps(data)
+            )
+            return str(text)
+    except Exception:
+        pass
+    return None
+
+
+def fetch_page_text(url: str) -> str | None:
+    try:
+        r = requests.get(url, headers=HEADERS, timeout=12)
+        soup = BeautifulSoup(r.text, "html.parser")
+        for tag in soup(["script", "style", "nav", "footer", "header"]):
+            tag.decompose()
+        return soup.get_text(separator=" ", strip=True)
+    except Exception:
+        return None
+
+
+def call_cloudflare_ai(system_prompt: str, user_prompt: str) -> str:
+    try:
+        r = requests.post(
+            CF_AI_URL,
+            headers={
+                "Authorization": f"Bearer {CF_AUTH_TOKEN}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user",   "content": user_prompt},
+                ]
+            },
+            timeout=90,
+        )
+        if r.status_code == 200:
+            data = r.json()
+            return data.get("result", {}).get("response", "")
+    except Exception as e:
+        return f"__ERROR__: {e}"
+    return ""
+
+
+# ─── Compliance Analysis ───────────────────────────────────────────────────────
+def build_circular_context(circulars_data) -> str:
+    if not circulars_data:
+        return "No regulatory circulars available."
+    items = circulars_data if isinstance(circulars_data, list) else (
+        circulars_data.get("data") or circulars_data.get("circulars") or
+        circulars_data.get("results") or []
     )
-    
-    regulator_map = {
-        "SEBI": "sebi",
-        "RBI": "rbi",
-        "FCA": "fca"
+    lines = []
+    for c in items[:8]:
+        if isinstance(c, dict):
+            title = c.get("title", c.get("subject", "Untitled"))
+            date  = c.get("date", c.get("published_date", c.get("issued_date", "")))
+            ref   = c.get("circular_number", c.get("ref", ""))
+            lines.append(f"• [{ref}] {title} ({date})")
+    return "\n".join(lines) if lines else "Circulars fetched but no structured entries found."
+
+
+def analyse_document(content: str | None, circulars_data, regulator: str, doc_url: str) -> dict:
+    reg_info   = REGULATORS[regulator]
+    reg_name   = reg_info["name"]
+    circ_ctx   = build_circular_context(circulars_data)
+    content_snippet = (content or "")[:3500]
+
+    system_prompt = f"""You are a senior regulatory compliance analyst specialising in {reg_name} ({regulator}) regulations.
+Analyse documents for compliance with {regulator} rules, guidelines, and recent circulars.
+Respond ONLY with a valid JSON object — no markdown fences, no preamble — with these exact keys:
+  compliance_score  : integer 0–100 (100 = fully compliant)
+  risk_level        : one of "Low" | "Medium" | "High" | "Critical"
+  summary           : 2–3 sentence plain-English overview
+  key_findings      : array of 3–5 strings (specific observations)
+  gaps              : array of identified compliance gaps (may be empty)
+  recommendations   : array of 2–4 actionable strings
+  applicable_rules  : array of relevant {regulator} regulations/sections referenced"""
+
+    user_prompt = f"""Assess this document for {regulator} compliance.
+
+Document URL: {doc_url}
+
+Extracted Content:
+{content_snippet if content_snippet else "[Content could not be extracted — infer from URL and context]"}
+
+Recent {regulator} Circulars / Regulatory Context:
+{circ_ctx}
+
+Return the JSON compliance analysis now."""
+
+    raw = call_cloudflare_ai(system_prompt, user_prompt)
+
+    if raw.startswith("__ERROR__"):
+        return _fallback_result(raw)
+
+    try:
+        clean = raw.strip()
+        if "```" in clean:
+            clean = clean.split("```")[1]
+            if clean.startswith("json"):
+                clean = clean[4:]
+        return json.loads(clean.strip())
+    except Exception:
+        return {
+            "compliance_score": 50,
+            "risk_level": "Medium",
+            "summary": raw[:600] if raw else "Analysis could not be structured.",
+            "key_findings": [],
+            "gaps": [],
+            "recommendations": [],
+            "applicable_rules": [],
+        }
+
+
+def _fallback_result(msg: str) -> dict:
+    return {
+        "compliance_score": 0,
+        "risk_level": "High",
+        "summary": f"Analysis failed: {msg}",
+        "key_findings": [],
+        "gaps": [],
+        "recommendations": ["Check API credentials in Streamlit secrets."],
+        "applicable_rules": [],
     }
-    
+
+
+# ─── Score Colour Helpers ──────────────────────────────────────────────────────
+def score_colour(s: int) -> str:
+    if s >= 80: return "#22c55e"
+    if s >= 60: return "#f59e0b"
+    if s >= 40: return "#f97316"
+    return "#ef4444"
+
+def risk_class(r: str) -> str:
+    return {"Low": "risk-low", "Medium": "risk-medium", "High": "risk-high", "Critical": "risk-critical"}.get(r, "risk-medium")
+
+# ─── UI ────────────────────────────────────────────────────────────────────────
+st.markdown("""
+<div class="main-header">
+  <div class="tagline">⚖️ &nbsp; Regulatory Compliance Intelligence</div>
+  <h1>ComplyKrawl</h1>
+  <div style="margin-top:10px;color:#64748b;font-size:0.9rem;">
+    Crawl any website · Extract documents · Analyse against live regulatory circulars
+  </div>
+</div>
+""", unsafe_allow_html=True)
+
+# ─── Sidebar ───────────────────────────────────────────────────────────────────
+with st.sidebar:
+    st.markdown("### ⚙️ Settings")
+
+    regulator = st.selectbox(
+        "Regulatory Body",
+        list(REGULATORS.keys()),
+        format_func=lambda x: f"{x}  —  {REGULATORS[x]['country']}",
+    )
+    reg_info = REGULATORS[regulator]
+    st.caption(reg_info["name"])
+
     st.divider()
-    
-    # Debug mode toggle
-    st.session_state.show_debug = st.checkbox("🐛 Show Debug Info", value=False)
-    
-    analyze_button = st.button("🚀 Start Analysis", type="primary", use_container_width=True)
 
-# Main content
-if not analyze_button and not st.session_state.analysis_complete:
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        st.info("**1. Enter Website**\nProvide the URL to analyze")
-    
-    with col2:
-        st.info("**2. Select Regulator**\nChoose applicable regulatory body")
-    
-    with col3:
-        st.info("**3. Get Real AI Analysis**\nNo mock scores - actual compliance evaluation")
-    
+    crawl_mode = st.radio(
+        "Crawl Strategy",
+        ["🗺️ Auto (Sitemap → Crawl)", "🗺️ Sitemap Only", "🤖 Full Crawl", "📁 Custom Paths"],
+        index=0,
+    )
+
+    max_pages = st.slider("Max pages (crawl mode)", 10, 150, 40)
+    max_docs  = st.slider("Max documents to analyse", 1, 20, 5)
+    circ_limit = st.slider("Circulars to load", 5, 50, 15)
+
     st.divider()
-    
-    st.subheader("Supported Regulators")
-    cols = st.columns(3)
-    regulators_info = [
-        ("SEBI", "Securities and Exchange Board of India", "India"),
-        ("RBI", "Reserve Bank of India", "India"),
-        ("FCA", "Financial Conduct Authority", "UK")
-    ]
-    
-    for col, (code, name, country) in zip(cols, regulators_info):
-        with col:
-            st.markdown(f"""
-            <div class="regulator-badge">
-                <strong>{code}</strong><br>
-                <small>{name}</small><br>
-                <small>📍 {country}</small>
-            </div>
-            """, unsafe_allow_html=True)
+    docs_only = st.checkbox("📄 Documents only (PDF/DOCX/etc.)", value=True)
 
-elif analyze_button:
-    if not website_url:
-        st.error("Please enter a website URL")
-    else:
-        try:
-            cloudflare_account_id = st.secrets["CLOUDFLARE_ACCOUNT_ID"]
-            cloudflare_auth_token = st.secrets["CLOUDFLARE_AUTH_TOKEN"]
-            supabase_api_key = st.secrets["SUPABASE_API_KEY"]
-            pdf_extractor_url = st.secrets.get("PDF_EXTRACTOR_URL", "http://72.61.251.247:3000/extract-pdf-url")
-        except Exception as e:
-            st.error(f"Missing required secrets: {str(e)}")
-            st.stop()
-        
-        with st.spinner("🔍 Crawling website for compliance documents..."):
-            crawler = ComplianceCrawler(website_url)
-            pdf_urls = crawler.crawl_for_pdfs(custom_path, max_pages)
-        
-        st.success(f"✅ Found {len(pdf_urls)} PDF documents")
-        
-        if pdf_urls:
-            with st.expander(f"📄 Found Documents ({len(pdf_urls)})"):
-                for i, url in enumerate(pdf_urls[:50], 1):
-                    st.text(f"{i}. {url}")
-                if len(pdf_urls) > 50:
-                    st.info(f"... and {len(pdf_urls) - 50} more")
-            
-            with st.spinner(f"📋 Fetching {regulator} regulatory context..."):
-                analyzer = ComplianceAnalyzer(
-                    cloudflare_account_id,
-                    cloudflare_auth_token,
-                    supabase_api_key,
-                    pdf_extractor_url
-                )
-                regulatory_context = analyzer.get_regulatory_context(
-                    regulator_map[regulator]
-                )
-            
-            st.success(f"✅ Retrieved {len(regulatory_context)} recent {regulator} circulars")
-            
-            progress_bar = st.progress(0)
-            status_text = st.empty()
-            
-            all_analyses = []
-            all_debug_info = []
-            
-            for i, pdf_url in enumerate(pdf_urls[:5]):
-                status_text.text(f"🔍 Analyzing document {i+1}/{min(5, len(pdf_urls))}...")
-                progress_bar.progress((i + 1) / min(5, len(pdf_urls)))
-                
-                analyzer.debug_info = []  # Reset debug info
-                
-                # Extract PDF
-                content = analyzer.extract_pdf_content(pdf_url)
-                
-                # Always analyze, even if extraction failed (to show error)
-                analysis = analyzer.analyze_with_ai(
-                    content,
-                    regulatory_context,
-                    regulator,
-                    pdf_url
-                )
-                analysis['url'] = pdf_url
-                analysis['content_length'] = len(content)
-                all_analyses.append(analysis)
-                all_debug_info.extend(analyzer.debug_info)
-                
-                # Small delay to avoid rate limiting
-                time.sleep(1)
-            
-            progress_bar.empty()
-            status_text.empty()
-            
-            # Calculate overall score (exclude failed analyses)
-            valid_analyses = [a for a in all_analyses if not a.get('ai_error', False)]
-            
-            if valid_analyses:
-                avg_score = sum(a.get('score', 0) for a in valid_analyses) / len(valid_analyses)
-            else:
-                avg_score = 0
-                st.error("⚠️ All AI analyses failed. Check debug info below.")
-            
-            st.session_state.analysis_results = {
-                'score': avg_score,
-                'regulator': regulator,
-                'analyses': all_analyses,
-                'pdf_count': len(pdf_urls),
-                'website': website_url,
-                'debug_info': all_debug_info,
-                'failed_count': len([a for a in all_analyses if a.get('ai_error', False)])
-            }
-            st.session_state.analysis_complete = True
-            st.rerun()
-        else:
-            st.warning("No PDF documents found on the website.")
-
-# Display Results
-if st.session_state.analysis_complete and st.session_state.analysis_results:
-    results = st.session_state.analysis_results
-    
-    col1, col2 = st.columns([3, 1])
-    with col1:
-        st.subheader(f"Analysis Results for {results['website']}")
-        st.caption(f"Regulator: {results['regulator']} | Documents Analyzed: {len(results['analyses'])}/{results['pdf_count']}")
-        if results.get('failed_count', 0) > 0:
-            st.warning(f"⚠️ {results['failed_count']} analysis failed - see details below")
-    
-    with col2:
-        if st.button("🔄 New Analysis"):
-            st.session_state.analysis_complete = False
-            st.session_state.analysis_results = None
-            st.rerun()
-    
-    # Debug info
-    if st.session_state.show_debug and results.get('debug_info'):
-        with st.expander("🐛 Debug Information", expanded=True):
-            st.markdown('<div class="debug-section">', unsafe_allow_html=True)
-            for info in results['debug_info']:
-                st.text(info)
-            st.markdown('</div>', unsafe_allow_html=True)
-    
-    # Overall Score
-    score = results['score']
-    score_color = "#28a745" if score >= 80 else "#ffc107" if score >= 60 else "#dc3545"
-    
-    st.markdown(f"""
-    <div class="score-card" style="background: linear-gradient(135deg, {score_color}dd 0%, {score_color}99 100%);">
-        <div>Overall Compliance Score</div>
-        <div class="score-number">{score:.0f}/100</div>
-        <div>{'Excellent' if score >= 80 else 'Needs Improvement' if score >= 60 else 'Critical Issues'}</div>
+    st.divider()
+    st.markdown("""
+    <div style="font-size:0.72rem;color:#475569;font-family:'DM Mono',monospace;">
+    Keys loaded from<br><code>st.secrets</code>:<br>
+    CLOUDFLARE_ACCOUNT_ID<br>
+    CLOUDFLARE_AUTH_TOKEN<br>
+    LENS_API_KEY
     </div>
     """, unsafe_allow_html=True)
-    
-    # Document Analysis
-    st.subheader("📊 Detailed Analysis")
-    
-    for idx, analysis in enumerate(results['analyses'], 1):
-        is_error = analysis.get('ai_error', False)
-        score_display = analysis.get('score', 0)
-        
-        title = f"Document {idx} - "
-        if is_error:
-            title += "❌ ANALYSIS FAILED"
+
+# ─── Main Input ────────────────────────────────────────────────────────────────
+c1, c2 = st.columns([5, 1])
+with c1:
+    website_url = st.text_input(
+        "🌐 Target Website URL",
+        placeholder="https://www.sebi.gov.in",
+        label_visibility="collapsed",
+    )
+with c2:
+    run_btn = st.button("🚀 Analyse", use_container_width=True, type="primary")
+
+custom_paths_text = ""
+if "Custom" in crawl_mode:
+    custom_paths_text = st.text_area(
+        "Custom document paths (one per line)",
+        placeholder="/documents/\n/circulars/annual-report.pdf\n/compliance/",
+        height=100,
+    )
+
+st.divider()
+
+# ─── Main Logic ────────────────────────────────────────────────────────────────
+if run_btn:
+    if not website_url:
+        st.warning("Please enter a website URL.")
+        st.stop()
+
+    website_url = normalise_url(website_url)
+
+    # ── Phase 1: Crawl ──────────────────────────────────────────────────────
+    st.markdown('<div class="section-header">01 · URL Discovery</div>', unsafe_allow_html=True)
+
+    all_urls: list[str] = []
+    sitemap_used = False
+
+    with st.status("Crawling website…", expanded=True) as crawl_status:
+        if "Custom" in crawl_mode:
+            st.write("📁 Building URLs from custom paths…")
+            all_urls = build_custom_urls(website_url, custom_paths_text)
+            st.write(f"✅ {len(all_urls)} custom URLs built")
         else:
-            title += f"Score: {score_display}/100"
-        
-        with st.expander(title, expanded=is_error):
-            st.caption(f"🔗 {analysis.get('url', 'N/A')}")
-            st.caption(f"📄 Content: {analysis.get('content_length', 0)} characters extracted")
-            
-            # Show raw AI response in debug mode
-            if st.session_state.show_debug and 'raw_response' in analysis:
-                st.markdown("**Raw AI Response:**")
-                st.code(analysis['raw_response'], language='text')
-            
-            st.markdown(f"**Summary:** {analysis.get('summary', 'No summary available')}")
-            
-            findings = analysis.get('findings', [])
-            if findings:
-                st.markdown("**Findings:**")
-                for finding in findings:
-                    level = finding.get('level', 'info')
-                    st.markdown(f"""
-                    <div class="finding-card {level}">
-                        <strong>{finding.get('title', 'N/A')}</strong><br>
-                        {finding.get('description', 'N/A')}<br>
-                        <small><em>Regulation: {finding.get('regulation', 'N/A')}</em></small>
-                    </div>
-                    """, unsafe_allow_html=True)
-            
-            recommendations = analysis.get('recommendations', [])
-            if recommendations:
-                st.markdown("**Recommendations:**")
-                for rec in recommendations:
-                    st.markdown(f"- {rec}")
-    
-    # Export
-    st.divider()
-    if st.button("📥 Export Report (JSON)"):
-        report_data = {
-            "timestamp": datetime.now().isoformat(),
-            "website": results['website'],
-            "regulator": results['regulator'],
-            "overall_score": results['score'],
-            "documents_analyzed": len(results['analyses']),
-            "total_documents": results['pdf_count'],
-            "failed_analyses": results.get('failed_count', 0),
-            "analyses": results['analyses']
-        }
-        
-        st.download_button(
-            label="Download Report",
-            data=json.dumps(report_data, indent=2),
-            file_name=f"compliance_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
-            mime="application/json"
+            if "Auto" in crawl_mode or "Sitemap" in crawl_mode:
+                st.write("🗺️ Searching for sitemap…")
+                sitemap_urls = fetch_sitemap(website_url)
+                if sitemap_urls:
+                    all_urls = sitemap_urls
+                    sitemap_used = True
+                    st.write(f"✅ Sitemap found — {len(sitemap_urls)} URLs indexed")
+                else:
+                    st.write("⚠️ No sitemap found")
+
+            if not sitemap_used and "Sitemap Only" not in crawl_mode:
+                st.write(f"🤖 Starting link crawler (max {max_pages} pages)…")
+                all_urls = crawl_website(website_url, max_pages)
+                st.write(f"✅ Crawl complete — {len(all_urls)} pages discovered")
+
+        analysis_targets = all_urls
+        if docs_only:
+            doc_urls = filter_documents(all_urls)
+            st.write(f"📄 {len(doc_urls)} document URLs filtered from {len(all_urls)} total")
+            analysis_targets = doc_urls if doc_urls else all_urls[:max_docs]
+        else:
+            analysis_targets = all_urls[:max_docs * 4]
+
+        analysis_targets = analysis_targets[:max_docs]
+        crawl_status.update(label=f"✅ Discovery done — {len(all_urls)} URLs | {len(analysis_targets)} queued for analysis", state="complete")
+
+    # Display discovered URLs
+    with st.expander(f"📋 All discovered URLs ({len(all_urls)})", expanded=False):
+        cols = st.columns(2)
+        for i, u in enumerate(all_urls[:200]):
+            cols[i % 2].markdown(f'<div class="url-chip">{u}</div>', unsafe_allow_html=True)
+
+    # ── Phase 2: Regulatory Context ─────────────────────────────────────────
+    st.markdown(f'<div class="section-header">02 · {regulator} Regulatory Context</div>', unsafe_allow_html=True)
+
+    circulars_data = None
+    with st.status(f"Fetching {regulator} circulars…", expanded=False) as reg_status:
+        circulars_data = fetch_circulars(reg_info["source"], circ_limit)
+        if circulars_data:
+            reg_status.update(label=f"✅ {regulator} circulars loaded", state="complete")
+        else:
+            reg_status.update(label=f"⚠️ Could not load {regulator} circulars (check LENS_API_KEY)", state="error")
+
+    if circulars_data:
+        items = circulars_data if isinstance(circulars_data, list) else (
+            circulars_data.get("data") or circulars_data.get("circulars") or
+            circulars_data.get("results") or []
         )
+        with st.expander(f"📜 {regulator} Circulars ({len(items)} loaded)", expanded=False):
+            for c in items[:10]:
+                if isinstance(c, dict):
+                    title = c.get("title", c.get("subject", "Untitled"))
+                    date  = c.get("date", c.get("published_date", "—"))
+                    ref   = c.get("circular_number", c.get("ref", ""))
+                    st.markdown(f"""
+                    <div class="circular-card">
+                        <div class="circ-title">{title}</div>
+                        <div class="circ-meta">{ref} &nbsp;·&nbsp; {date}</div>
+                    </div>""", unsafe_allow_html=True)
+
+    # ── Phase 3: Extract + Analyse ──────────────────────────────────────────
+    if not analysis_targets:
+        st.warning("No documents to analyse. Try unchecking 'Documents only' or adding custom paths.")
+        st.stop()
+
+    st.markdown('<div class="section-header">03 · AI Compliance Analysis</div>', unsafe_allow_html=True)
+
+    all_results = []
+
+    for idx, doc_url in enumerate(analysis_targets):
+        doc_name = doc_url.split("/")[-1] or doc_url
+        is_pdf   = doc_url.lower().endswith(".pdf")
+
+        with st.expander(f"{'📕' if is_pdf else '🌐'} {doc_name}", expanded=(idx == 0)):
+            pcol, acol = st.columns([1, 2])
+
+            with pcol:
+                st.markdown(f"**URL**")
+                st.code(doc_url, language=None)
+                st.caption(f"Type: {'PDF Document' if is_pdf else 'Web Page'}")
+
+            with acol:
+                prog = st.empty()
+                prog.info("⏳ Extracting content…")
+                content = None
+
+                if is_pdf:
+                    content = extract_pdf(doc_url)
+                    if not content:
+                        prog.warning("⚠️ PDF extraction failed — analysing from URL context.")
+                    else:
+                        prog.success(f"✅ Extracted {len(content):,} chars from PDF")
+                else:
+                    content = fetch_page_text(doc_url)
+                    if content:
+                        prog.success(f"✅ Extracted {len(content):,} chars from page")
+                    else:
+                        prog.warning("⚠️ Page extraction failed")
+
+            ai_prog = st.empty()
+            ai_prog.info(f"🤖 Running {regulator} compliance analysis via Cloudflare AI…")
+            analysis = analyse_document(content, circulars_data, regulator, doc_url)
+            ai_prog.empty()
+
+            all_results.append({"url": doc_url, "name": doc_name, "analysis": analysis})
+
+            score     = analysis.get("compliance_score", 0)
+            risk      = analysis.get("risk_level", "Medium")
+            summary   = analysis.get("summary", "")
+            findings  = analysis.get("key_findings", [])
+            gaps      = analysis.get("gaps", [])
+            recs      = analysis.get("recommendations", [])
+            rules     = analysis.get("applicable_rules", [])
+
+            sc = score_colour(score)
+            rc = risk_class(risk)
+
+            # Score row
+            m1, m2, m3 = st.columns(3)
+            m1.markdown(f"""
+            <div class="score-card">
+                <div class="score-number" style="color:{sc}">{score}</div>
+                <div class="score-label">Compliance Score / 100</div>
+            </div>""", unsafe_allow_html=True)
+
+            m2.markdown(f"""
+            <div class="score-card">
+                <div style="margin-top:8px;"><span class="risk-badge {rc}">{risk}</span></div>
+                <div class="score-label" style="margin-top:10px;">Risk Level</div>
+            </div>""", unsafe_allow_html=True)
+
+            m3.markdown(f"""
+            <div class="score-card">
+                <div class="score-number" style="color:#60a5fa">{len(gaps)}</div>
+                <div class="score-label">Compliance Gaps</div>
+            </div>""", unsafe_allow_html=True)
+
+            st.progress(score / 100)
+
+            if summary:
+                st.markdown(f"> {summary}")
+
+            r1, r2 = st.columns(2)
+            with r1:
+                if findings:
+                    st.markdown("**🔍 Key Findings**")
+                    for f in findings:
+                        st.markdown(f'<div class="finding-item">• {f}</div>', unsafe_allow_html=True)
+                if rules:
+                    st.markdown("**📖 Applicable Rules**")
+                    for rule in rules:
+                        st.markdown(f'<div class="finding-item" style="border-left-color:#818cf8">• {rule}</div>', unsafe_allow_html=True)
+
+            with r2:
+                if gaps:
+                    st.markdown("**⚠️ Compliance Gaps**")
+                    for g in gaps:
+                        st.markdown(f'<div class="gap-item">⚠ {g}</div>', unsafe_allow_html=True)
+                if recs:
+                    st.markdown("**✅ Recommendations**")
+                    for rec in recs:
+                        st.markdown(f'<div class="rec-item">→ {rec}</div>', unsafe_allow_html=True)
+
+    # ── Phase 4: Summary Dashboard ──────────────────────────────────────────
+    if len(all_results) > 1:
+        st.markdown('<div class="section-header">04 · Portfolio Summary</div>', unsafe_allow_html=True)
+
+        scores  = [r["analysis"].get("compliance_score", 0) for r in all_results]
+        avg     = sum(scores) / len(scores)
+        hi_risk = sum(1 for r in all_results if r["analysis"].get("risk_level") in ("High", "Critical"))
+        total_gaps = sum(len(r["analysis"].get("gaps", [])) for r in all_results)
+
+        d1, d2, d3, d4 = st.columns(4)
+        d1.metric("📊 Avg Score", f"{avg:.0f}/100")
+        d2.metric("📄 Docs Analysed", len(all_results))
+        d3.metric("🔴 High/Critical Risk", hi_risk)
+        d4.metric("⚠️ Total Gaps", total_gaps)
+
+        st.progress(avg / 100)
+
+        # Score breakdown table
+        st.markdown("**Score Breakdown**")
+        rows = []
+        for r in all_results:
+            a = r["analysis"]
+            s = a.get("compliance_score", 0)
+            sc = score_colour(s)
+            rows.append(
+                f"<tr>"
+                f"<td style='padding:8px 12px;color:#94a3b8;font-size:0.8rem;font-family:DM Mono,monospace;word-break:break-all'>{r['url'][:80]}</td>"
+                f"<td style='padding:8px 12px;text-align:center'><span style='font-weight:700;color:{sc}'>{s}</span></td>"
+                f"<td style='padding:8px 12px;text-align:center'><span class='risk-badge {risk_class(a.get('risk_level','Medium'))}'>{a.get('risk_level','—')}</span></td>"
+                f"<td style='padding:8px 12px;text-align:center;color:#94a3b8'>{len(a.get('gaps',[]))}</td>"
+                f"</tr>"
+            )
+        table_html = f"""
+        <style>
+        .summary-table {{ width:100%;border-collapse:collapse;background:#0f172a;border-radius:12px;overflow:hidden; }}
+        .summary-table th {{ padding:10px 12px;text-align:left;font-family:'DM Mono',monospace;font-size:0.7rem;
+                             color:#38bdf8;text-transform:uppercase;letter-spacing:0.1em;background:#111827; }}
+        .summary-table tr:hover td {{ background:#1e293b; }}
+        </style>
+        <table class="summary-table">
+          <thead><tr>
+            <th>Document</th><th style="text-align:center">Score</th>
+            <th style="text-align:center">Risk</th><th style="text-align:center">Gaps</th>
+          </tr></thead>
+          <tbody>{''.join(rows)}</tbody>
+        </table>"""
+        st.markdown(table_html, unsafe_allow_html=True)
+
+elif not run_btn:
+    # Landing placeholder
+    st.markdown("""
+    <div style="text-align:center;padding:60px 20px;color:#334155;">
+        <div style="font-size:3.5rem;margin-bottom:16px;">⚖️</div>
+        <div style="font-size:1.1rem;font-weight:600;color:#64748b;">
+            Enter a website URL and select a regulator to begin
+        </div>
+        <div style="font-size:0.85rem;margin-top:10px;color:#475569;">
+            ComplyKrawl will crawl the site, extract documents, fetch live regulatory circulars,<br>
+            and run AI-powered compliance analysis — all in one click.
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
